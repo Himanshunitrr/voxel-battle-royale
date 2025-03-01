@@ -1,0 +1,13 @@
+{
+	"name": "voxel-battle-royale",
+	"version": "1.0.0",
+	"description": "A 3D browser battle royale game with voxel assets, third-person view, gun pickup, shooting, and multiplayer.",
+	"main": "server/server.js",
+	"scripts": {
+		"start": "node server/server.js"
+	},
+	"dependencies": {
+		"express": "^4.18.2",
+		"socket.io": "^4.5.4"
+	}
+}
