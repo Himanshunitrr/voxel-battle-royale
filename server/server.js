@@ -9,7 +9,7 @@ const io = socketIo(server);
 // Shared leaderboard
 let matchKillCounts = {};
 
-// Define a common environment with fixed positions for trees and guns
+// Define a common environment with fixed positions
 const environment = {
 	trees: [],
 	guns: [],
@@ -28,7 +28,7 @@ for (let i = 0; i < 20; i++) {
 	environment.guns.push({ x, y, z });
 }
 
-// Track connected players
+// Track connected players (alive only)
 let players = {};
 
 app.use(express.static("client"));
@@ -51,10 +51,9 @@ io.on("connection", (socket) => {
 			health: 100,
 			hasGun: false,
 		};
-
 		// Send common environment to new client
 		socket.emit("environment", environment);
-		// Send current players (except self)
+		// Send all existing players (alive only)
 		socket.emit(
 			"allPlayers",
 			Object.values(players).filter((p) => p.id !== socket.id)
