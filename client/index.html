@@ -4,13 +4,13 @@
     <meta charset="UTF-8" />
     <title>3D Browser Battle Royale</title>
     <style>
-      body { margin: 0; overflow: hidden; }
+      body { margin: 0; overflow: hidden; background: #000; }
       canvas { display: block; }
       /* Pre-game overlay for name entry */
       #preGameOverlay {
         position: fixed;
         top: 0; left: 0; right: 0; bottom: 0;
-        background: rgba(0, 0, 0, 0.85);
+        background: rgba(0,0,0,0.85);
         color: #fff;
         display: flex;
         flex-direction: column;
@@ -23,19 +23,22 @@
         padding: 0.5em;
         margin: 0.5em;
       }
-      /* Pointer lock instructions */
-      #instructions {
+      /* Game Over overlay */
+      #gameOverOverlay {
         position: fixed;
-        top: 50%;
-        left: 50%;
-        transform: translate(-50%, -50%);
-        background: rgba(0,0,0,0.7);
+        top: 0; left: 0; right: 0; bottom: 0;
+        background: rgba(0,0,0,0.9);
         color: #fff;
-        padding: 1em;
-        font-size: 1.5em;
-        cursor: pointer;
-        z-index: 5;
         display: none;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        z-index: 20;
+      }
+      #gameOverOverlay h1 { font-size: 3em; margin-bottom: 20px; }
+      #gameOverOverlay button {
+        font-size: 1.5em;
+        padding: 0.7em 1.5em;
       }
       /* Crosshair */
       #crosshair {
@@ -47,7 +50,7 @@
         z-index: 5;
         pointer-events: none;
       }
-      /* UI overlay for health and leaderboard */
+      /* UI Overlay */
       #uiOverlay {
         position: fixed;
         top: 10px;
@@ -56,17 +59,6 @@
         font-family: sans-serif;
         z-index: 5;
         text-align: right;
-      }
-      /* Minimap */
-      #minimap {
-        position: fixed;
-        top: 10px;
-        left: 10px;
-        width: 150px;
-        height: 150px;
-        border: 2px solid #fff;
-        z-index: 5;
-        background: #333;
       }
     </style>
     <!-- Import map for THREE.js -->
@@ -84,7 +76,10 @@
       <input id="playerNameInput" type="text" placeholder="Player Name" />
       <button id="startGameButton">Start Game</button>
     </div>
-    <div id="instructions">Click to Lock Pointer & Jump</div>
+    <div id="gameOverOverlay">
+      <h1>Game Over</h1>
+      <button onclick="window.location.reload()">Restart Game</button>
+    </div>
     <div id="crosshair"></div>
     <div id="uiOverlay">
       <div id="healthDisplay">Health: 100</div>
@@ -93,7 +88,6 @@
         <ol id="leaderboardList"></ol>
       </div>
     </div>
-    <canvas id="minimap"></canvas>
     <script src="/socket.io/socket.io.js"></script>
     <script type="module" src="main.js"></script>
   </body>
