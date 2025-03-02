@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Battle Royale Leaderboard</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: #222;
+      color: #eee;
+      margin: 0;
+      padding: 20px;
+    }
+    h1 {
+      text-align: center;
+      margin-bottom: 30px;
+    }
+    table {
+      width: 80%;
+      margin: 0 auto 30px;
+      border-collapse: collapse;
+    }
+    th, td {
+      padding: 12px 15px;
+      border: 1px solid #444;
+      text-align: center;
+    }
+    th {
+      background: #333;
+    }
+    tr:nth-child(even) {
+      background: #2a2a2a;
+    }
+    a.button {
+      display: inline-block;
+      margin: 0 auto;
+      padding: 10px 20px;
+      background: #0066cc;
+      color: #fff;
+      text-decoration: none;
+      border-radius: 4px;
+      text-align: center;
+    }
+    a.button:hover {
+      background: #0055aa;
+    }
+  </style>
+</head>
+<body>
+  <h1>Battle Royale Leaderboard</h1>
+  <table id="leaderboardTable">
+    <thead>
+      <tr>
+        <th>Rank</th>
+        <th>Player</th>
+        <th>Kills</th>
+      </tr>
+    </thead>
+    <tbody>
+      <!-- Leaderboard rows will be inserted here dynamically -->
+    </tbody>
+  </table>
+  <div style="text-align:center;">
+    <a href="/" class="button">Back to Game</a>
+  </div>
+  <script>
+    // Fetch leaderboard data from the server and render it as a table.
+    fetch('/leaderboard')
+      .then(response => response.json())
+      .then(data => {
+        // Data is expected to be an array of arrays: [ [name, kills], ... ]
+        const tbody = document.getElementById("leaderboardTable").querySelector("tbody");
+        data.forEach((entry, index) => {
+          const tr = document.createElement("tr");
+          const rankTd = document.createElement("td");
+          rankTd.textContent = index + 1;
+          const nameTd = document.createElement("td");
+          nameTd.textContent = entry[0];
+          const killsTd = document.createElement("td");
+          killsTd.textContent = entry[1];
+          tr.appendChild(rankTd);
+          tr.appendChild(nameTd);
+          tr.appendChild(killsTd);
+          tbody.appendChild(tr);
+        });
+      })
+      .catch(err => {
+        console.error("Failed to load leaderboard", err);
+      });
+  </script>
+</body>
+</html>

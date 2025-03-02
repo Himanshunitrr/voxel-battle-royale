@@ -14,7 +14,7 @@ import * as CANNON from "https://cdn.jsdelivr.net/npm/cannon-es@0.18.0/dist/cann
 	let killCounts = {}; // leaderboard
 	const keys = {}; // keyboard state
 
-	// Global alive players list – only players in this object are alive.
+	// Global alive players list – only these players are processed
 	let alivePlayers = {};
 
 	// UI elements
@@ -22,7 +22,7 @@ import * as CANNON from "https://cdn.jsdelivr.net/npm/cannon-es@0.18.0/dist/cann
 	const leaderboardList = document.getElementById("leaderboardList");
 	const gameOverOverlay = document.getElementById("gameOverOverlay");
 
-	// Pre-game: get player name
+	// Pre-game: get player name from input or cache
 	let playerName = localStorage.getItem("playerName") || "";
 	const preGameOverlay = document.getElementById("preGameOverlay");
 	const startGameButton = document.getElementById("startGameButton");
@@ -35,15 +35,16 @@ import * as CANNON from "https://cdn.jsdelivr.net/npm/cannon-es@0.18.0/dist/cann
 		localStorage.setItem("playerName", playerName);
 		preGameOverlay.style.display = "none";
 		initGame();
-		// Request pointer lock after starting the game
-		renderer.domElement.requestPointerLock =
-			renderer.domElement.requestPointerLock ||
-			renderer.domElement.mozRequestPointerLock;
-		renderer.domElement.requestPointerLock();
+		// Request pointer lock when starting the game
+		renderer.domElement.requestPointerLock?.();
 	});
 	if (playerName !== "") {
 		preGameOverlay.style.display = "none";
-		setTimeout(initGame, 1000);
+		setTimeout(() => {
+			initGame();
+			// If a name exists in cache, immediately request pointer lock
+			renderer.domElement.requestPointerLock?.();
+		}, 1000);
 	}
 
 	let isDead = false; // freeze local updates when dead
@@ -56,10 +57,9 @@ import * as CANNON from "https://cdn.jsdelivr.net/npm/cannon-es@0.18.0/dist/cann
 		if (document.pointerLockElement === renderer.domElement) {
 			yaw -= event.movementX * 0.002;
 			pitch -= event.movementY * 0.002;
-			// Clamp pitch between -90° and 90°
 			pitch = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, pitch));
 		} else {
-			// Fallback: use absolute position
+			// Fallback: absolute positions
 			yaw = THREE.MathUtils.lerp(
 				-Math.PI,
 				Math.PI,
@@ -72,7 +72,6 @@ import * as CANNON from "https://cdn.jsdelivr.net/npm/cannon-es@0.18.0/dist/cann
 			);
 		}
 	});
-
 	// Reverse A and D keys: A moves right, D moves left.
 	let isAiming = false;
 	let isRightShoulder = true;
@@ -94,7 +93,7 @@ import * as CANNON from "https://cdn.jsdelivr.net/npm/cannon-es@0.18.0/dist/cann
 	let plane,
 		planeSpeed = 5;
 
-	// COMMON TERRAIN
+	// COMMON TERRAIN: deterministic height function
 	function getGroundHeight(x, z) {
 		return 3 + 3 * Math.sin(x * 0.05) * Math.cos(z * 0.05);
 	}
@@ -228,6 +227,11 @@ import * as CANNON from "https://cdn.jsdelivr.net/npm/cannon-es@0.18.0/dist/cann
 		renderer.setSize(window.innerWidth, window.innerHeight);
 		document.body.appendChild(renderer.domElement);
 
+		// Request pointer lock automatically if playerName exists.
+		if (playerName !== "") {
+			renderer.domElement.requestPointerLock?.();
+		}
+
 		// Lights
 		const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
 		scene.add(ambientLight);
@@ -286,7 +290,7 @@ import * as CANNON from "https://cdn.jsdelivr.net/npm/cannon-es@0.18.0/dist/cann
 			});
 		});
 
-		// Update remote players
+		// Update remote players in real time
 		socket.on("playerUpdate", (data) => {
 			if (data.id === socket.id) return;
 			if (!alivePlayers[data.id]) return;
@@ -311,6 +315,7 @@ import * as CANNON from "https://cdn.jsdelivr.net/npm/cannon-es@0.18.0/dist/cann
 			}
 			otherMesh.position.set(data.position.x, data.position.y, data.position.z);
 			otherMesh.userData.health = data.health;
+			// Update gun state for remote player
 			if (data.hasGun) {
 				if (!otherMesh.userData.gun) {
 					const gun = createGunModel(0, 0, 0);
@@ -344,7 +349,7 @@ import * as CANNON from "https://cdn.jsdelivr.net/npm/cannon-es@0.18.0/dist/cann
 		window.addEventListener("keyup", onKeyUp);
 		window.addEventListener("mousedown", onMouseDown);
 
-		// Spawn aeroplane
+		// Spawn aeroplane for entry
 		createAeroplane();
 		// Create local player
 		createPlayer();
@@ -352,6 +357,7 @@ import * as CANNON from "https://cdn.jsdelivr.net/npm/cannon-es@0.18.0/dist/cann
 		localTag.position.set(0, 3, 0);
 		player.add(localTag);
 
+		// Allow jump when colliding with terrain
 		playerBody.addEventListener("collide", (e) => {
 			if (e.body === hfBody) {
 				canJump = true;
@@ -361,7 +367,7 @@ import * as CANNON from "https://cdn.jsdelivr.net/npm/cannon-es@0.18.0/dist/cann
 		animate();
 	}
 
-	// WORLD OBJECT FUNCTIONS
+	// WORLD OBJECT CREATION
 
 	function createTree(x, z) {
 		const baseY = getGroundHeight(x, z);
@@ -559,7 +565,7 @@ import * as CANNON from "https://cdn.jsdelivr.net/npm/cannon-es@0.18.0/dist/cann
 		const delta = clock.getDelta();
 		world.step(1 / 60, delta, 3);
 
-		// Aeroplane movement
+		// Aeroplane movement for spawn
 		if (plane) {
 			plane.position.x += planeSpeed * delta;
 			if (plane.position.x > 50) {
@@ -618,7 +624,7 @@ import * as CANNON from "https://cdn.jsdelivr.net/npm/cannon-es@0.18.0/dist/cann
 		updateCrosshair();
 		updateUI();
 
-		// Gun pickup – if within range, attach gun with proper orientation
+		// Gun pickup – attach gun with fixed orientation
 		for (let i = guns.length - 1; i >= 0; i--) {
 			const gun = guns[i];
 			if (
@@ -634,7 +640,7 @@ import * as CANNON from "https://cdn.jsdelivr.net/npm/cannon-es@0.18.0/dist/cann
 			}
 		}
 
-		// Bullet updates and collisions with remote players
+		// Bullet updates and collision with remote players
 		for (let i = bullets.length - 1; i >= 0; i--) {
 			const bullet = bullets[i];
 			bullet.mesh.position.add(
@@ -687,7 +693,7 @@ import * as CANNON from "https://cdn.jsdelivr.net/npm/cannon-es@0.18.0/dist/cann
 			handleLocalDeath();
 			return;
 		}
-		// Emit local update if alive
+		// Emit local player update
 		socket.emit("playerUpdate", {
 			id: socket.id,
 			position: player.position,
@@ -721,7 +727,7 @@ import * as CANNON from "https://cdn.jsdelivr.net/npm/cannon-es@0.18.0/dist/cann
 		socket.emit("reportKill", { name });
 	}
 
-	// LOCAL DEATH HANDLING: remove from alivePlayers, stop updates, notify others, show overlay
+	// LOCAL DEATH HANDLING: update alivePlayers, remove mesh, stop updates, notify others, show overlay
 	function handleLocalDeath() {
 		isDead = true;
 		delete alivePlayers[socket.id];
@@ -760,6 +766,4 @@ import * as CANNON from "https://cdn.jsdelivr.net/npm/cannon-es@0.18.0/dist/cann
 			shootBullet();
 		}
 	}
-
-	// MAIN INITIALIZATION END
 })();

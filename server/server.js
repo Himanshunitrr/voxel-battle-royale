@@ -9,7 +9,7 @@ const io = socketIo(server);
 // Shared leaderboard
 let matchKillCounts = {};
 
-// Define common environment with fixed positions
+// Define a common environment with fixed positions
 const environment = {
 	trees: [],
 	guns: [],
@@ -33,12 +33,13 @@ let players = {};
 
 app.use(express.static("client"));
 
+const path = require("path");
 app.get("/leaderboard", (req, res) => {
-	const sorted = Object.entries(matchKillCounts)
-		.sort((a, b) => b[1] - a[1])
-		.slice(0, 10);
-	res.json(sorted);
+	res.sendFile(path.join(__dirname, "..", "client", "leaderboard.html"));
 });
+
+
+
 
 io.on("connection", (socket) => {
 	console.log("Player connected: " + socket.id);
