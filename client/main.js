@@ -494,29 +494,62 @@ import * as CANNON from "https://cdn.jsdelivr.net/npm/cannon-es@0.18.0/dist/cann
 		return other;
 	}
 
-	// BULLET HANDLING
-	function shootBullet() {
-		const forward = camera.getWorldDirection(new THREE.Vector3()).normalize();
-		let spawnPos = new THREE.Vector3();
-		if (player.userData.hasGun && player.userData.gun) {
-			player.localToWorld(spawnPos.copy(player.userData.gun.position));
-		} else {
-			spawnPos.copy(player.position).add(new THREE.Vector3(0, 2, 0));
-		}
-		const bulletGeom = new THREE.BoxGeometry(0.2, 0.2, 0.2);
-		const bulletMat = new THREE.MeshLambertMaterial({ color: 0xff0000 });
-		const bulletMesh = new THREE.Mesh(bulletGeom, bulletMat);
-		bulletMesh.position.copy(spawnPos);
-		scene.add(bulletMesh);
-		const bullet = {
-			mesh: bulletMesh,
-			direction: forward.clone(),
-			life: bulletLifetime,
-			owner: socket.id,
-		};
-		bullets.push(bullet);
-		socket.emit("bulletFired", { position: spawnPos, direction: forward });
+function shootBullet() {
+	// Determine spawn position from the gun's end (or fallback to player's position + offset)
+	let spawnPos = new THREE.Vector3();
+	if (player.userData.hasGun && player.userData.gun) {
+		player.localToWorld(spawnPos.copy(player.userData.gun.position));
+	} else {
+		spawnPos.copy(player.position).add(new THREE.Vector3(0, 2, 0));
 	}
+
+	// Set up a raycaster from the camera's world position and direction.
+	const camPos = new THREE.Vector3();
+	camera.getWorldPosition(camPos);
+	const camDir = camera.getWorldDirection(new THREE.Vector3()).normalize();
+	const raycaster = new THREE.Raycaster(camPos, camDir);
+
+	// Create a list of objects to test against.
+	// We filter out the local player's mesh to avoid self-intersection.
+	const objectsToTest = scene.children.filter((obj) => obj !== player);
+
+	// Raycast – this will return an array of intersections.
+	const intersects = raycaster.intersectObjects(objectsToTest, true);
+	let targetPoint;
+	if (intersects.length > 0) {
+		// Use the closest intersection point.
+		targetPoint = intersects[0].point;
+	} else {
+		// Fallback: a point far ahead along the camera's direction.
+		targetPoint = camPos.clone().add(camDir.clone().multiplyScalar(1000));
+	}
+
+	// Calculate the bullet's direction: from the gun's spawn position toward the target point.
+	const direction = new THREE.Vector3()
+		.subVectors(targetPoint, spawnPos)
+		.normalize();
+
+	// Create the bullet mesh.
+	const bulletGeom = new THREE.BoxGeometry(0.2, 0.2, 0.2);
+	const bulletMat = new THREE.MeshLambertMaterial({ color: 0xff0000 });
+	const bulletMesh = new THREE.Mesh(bulletGeom, bulletMat);
+	bulletMesh.position.copy(spawnPos);
+	scene.add(bulletMesh);
+
+	// Create the bullet object.
+	const bullet = {
+		mesh: bulletMesh,
+		direction: direction.clone(),
+		life: bulletLifetime,
+		owner: socket.id,
+	};
+	bullets.push(bullet);
+
+	// Emit the bulletFired event to notify other clients.
+	socket.emit("bulletFired", { position: spawnPos, direction: direction });
+}
+
+
 	function spawnBullet(position, direction, ownerId) {
 		const bulletGeom = new THREE.BoxGeometry(0.2, 0.2, 0.2);
 		const bulletMat = new THREE.MeshLambertMaterial({ color: 0xff0000 });
