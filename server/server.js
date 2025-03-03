@@ -7,41 +7,41 @@ const app = express();
 const server = http.createServer(app);
 const io = socketIo(server);
 
-// Shared leaderboard object (global kill counts)
+// Global leaderboard (kills)
 let matchKillCounts = {};
 
-// Define common environment with fixed positions
+// Define a common environment (trees and guns)
 const environment = {
 	trees: [],
 	guns: [],
 };
-// Generate 30 trees deterministically
-for (let i = 0; i < 30; i++) {
+
+// Generate 30 trees deterministically.
+for (let i = 0; i < 80; i++) {
 	let x = ((i * 7) % 100) - 50;
 	let z = ((i * 13) % 100) - 50;
 	environment.trees.push({ x, z });
 }
-// Generate 20 guns
-for (let i = 0; i < 20; i++) {
+
+// Generate 20 guns.
+for (let i = 0; i < 220; i++) {
 	let x = ((i * 11) % 80) - 40;
 	let z = ((i * 17) % 80) - 40;
-	let y = 1;
+	let y = 2;
 	environment.guns.push({ x, y, z });
 }
 
-// Track connected players (alive only)
+// Track connected players.
 let players = {};
 
 app.use(express.static(path.join(__dirname, "..", "client")));
 
-// Serve the leaderboard HTML page
 app.get("/leaderboard", (req, res) => {
 	res.sendFile(path.join(__dirname, "..", "client", "leaderboard.html"));
 });
 
-// New route to serve the global leaderboard JSON data
+// API endpoint for the global leaderboard.
 app.get("/api/leaderboard", (req, res) => {
-	// Sort leaderboard data by kills in descending order and return top 10.
 	const sorted = Object.entries(matchKillCounts)
 		.sort((a, b) => b[1] - a[1])
 		.slice(0, 10);
@@ -59,14 +59,14 @@ io.on("connection", (socket) => {
 			health: 100,
 			hasGun: false,
 		};
-
-		// Send common environment to the new client
+		// Send the common environment.
 		socket.emit("environment", environment);
-		// Send all current alive players (except self)
+		// Send all current players except self.
 		socket.emit(
 			"allPlayers",
 			Object.values(players).filter((p) => p.id !== socket.id)
 		);
+		// Notify others that a new player has joined.
 		socket.broadcast.emit("playerJoined", {
 			id: socket.id,
 			name: players[socket.id].name,
@@ -107,7 +107,7 @@ io.on("connection", (socket) => {
 	});
 });
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
 	console.log(`Server running on port ${PORT}`);
 });

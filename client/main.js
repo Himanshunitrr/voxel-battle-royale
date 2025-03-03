@@ -6,23 +6,27 @@ import * as CANNON from "https://cdn.jsdelivr.net/npm/cannon-es@0.18.0/dist/cann
 	// GLOBAL VARIABLES
 	let scene, camera, renderer, world, socket;
 	let player, playerBody; // local player and physics body
-	let hfBody; // physics heightfield for terrain
+	let hfBody; // physics terrain body
 	let otherPlayers = {}; // remote players keyed by socket id
-	let guns = []; // gun models in the world
+	let guns = []; // gun models lying in the world
 	let bullets = []; // active bullets
 
-	let killCounts = {}; // leaderboard
+	let killCounts = {}; // global leaderboard
 	const keys = {}; // keyboard state
 
-	// Global alivePlayers: only players whose id is in this object are alive.
+	// Global alivePlayers: networked players
 	let alivePlayers = {};
+	// Array for bots
+	let botPlayers = [];
+	// Global counter for unique bot IDs
+	let botCounter = 0;
 
 	// UI elements
 	const healthDisplay = document.getElementById("healthDisplay");
 	const leaderboardList = document.getElementById("leaderboardList");
 	const gameOverOverlay = document.getElementById("gameOverOverlay");
 
-	// Pre-game: get player name from input or cache
+	// --- Pre-game: Name & Pointer Lock ---
 	let playerName = localStorage.getItem("playerName") || "";
 	const preGameOverlay = document.getElementById("preGameOverlay");
 	const startGameButton = document.getElementById("startGameButton");
@@ -35,24 +39,118 @@ import * as CANNON from "https://cdn.jsdelivr.net/npm/cannon-es@0.18.0/dist/cann
 		localStorage.setItem("playerName", playerName);
 		preGameOverlay.style.display = "none";
 		initGame();
-		renderer.domElement.requestPointerLock?.();
 	});
 	if (playerName !== "") {
 		preGameOverlay.style.display = "none";
 		setTimeout(() => {
 			initGame();
-			renderer.domElement.requestPointerLock?.();
 		}, 1000);
 	}
 
-	let isDead = false; // freeze local updates when dead
+	let isDead = false; // freeze updates when dead
 
-	// CAMERA & CONTROL SETTINGS
+	// --- BOT FUNCTIONS ---
+	function spawnBot() {
+		// Spawn bot randomly in x,z between -40 and 40 (server values scaled by 10 in createTree).
+		const x = Math.random() * 80 - 40;
+		const z = Math.random() * 80 - 40;
+		// In physics terrain, elementSize is 10 so actual position will be x*10.
+		const y = getGroundHeight(x * 10, z * 10) + playerHeightOffset;
+		const botMesh = createOtherPlayer();
+		botMesh.position.set(x * 10, y, z * 10);
+		botMesh.userData.collisionRadius = 1.5; // fixed collision radius
+		const bot = {
+			id: "bot_" + botCounter++,
+			mesh: botMesh,
+			health: 100,
+			hasGun: true,
+			gun: null,
+			currentDirection: new THREE.Vector3(
+				Math.random() - 0.5,
+				0,
+				Math.random() - 0.5
+			).normalize(),
+			changeDirTime: Math.random() * 3 + 2,
+			fireCooldown: 0,
+			bulletSpeed: 80, // Bot bullet speed
+		};
+		botMesh.userData.botId = bot.id;
+		const gun = createGunModel(0, 0, 0);
+		gun.rotation.set(0, -Math.PI / 2, 0);
+		gun.position.set(0.7, 1.25, 0);
+		botMesh.add(gun);
+		bot.hasGun = true;
+		bot.gun = gun;
+		botMesh.userData.health = bot.health;
+		botMesh.userData.isBot = true;
+		botPlayers.push(bot);
+		scene.add(botMesh);
+	}
+
+	function updateBot(bot, delta) {
+		const detectionRange = 20;
+		const attackDistance = 10;
+		const botSpeed = 5;
+		const target = player;
+		const botPos = bot.mesh.position;
+		const targetPos = player.position;
+		const dist = botPos.distanceTo(targetPos);
+		if (dist < detectionRange) {
+			bot.currentDirection.copy(targetPos).sub(botPos).normalize();
+			if (dist > attackDistance) {
+				bot.mesh.position.add(
+					bot.currentDirection.clone().multiplyScalar(botSpeed * delta)
+				);
+			}
+			bot.fireCooldown -= delta;
+			if (bot.fireCooldown <= 0) {
+				shootBulletFromBot(bot);
+				bot.fireCooldown = 1.5;
+			}
+		} else {
+			bot.changeDirTime -= delta;
+			if (bot.changeDirTime <= 0) {
+				const angle = Math.random() * Math.PI * 2;
+				bot.currentDirection.set(Math.cos(angle), 0, Math.sin(angle));
+				bot.changeDirTime = Math.random() * 3 + 2;
+			}
+			bot.mesh.position.add(
+				bot.currentDirection.clone().multiplyScalar(botSpeed * delta)
+			);
+		}
+		const desiredY =
+			getGroundHeight(bot.mesh.position.x, bot.mesh.position.z) +
+			playerHeightOffset;
+		bot.mesh.position.y = desiredY;
+	}
+
+	function shootBulletFromBot(bot) {
+		const spawnPos = new THREE.Vector3();
+		bot.mesh.localToWorld(spawnPos.copy(bot.gun.position));
+		const direction = new THREE.Vector3()
+			.subVectors(player.position, spawnPos)
+			.normalize();
+		const bulletGeom = new THREE.BoxGeometry(0.2, 0.2, 0.2);
+		const bulletMat = new THREE.MeshLambertMaterial({ color: 0xff0000 });
+		const bulletMesh = new THREE.Mesh(bulletGeom, bulletMat);
+		bulletMesh.position.copy(spawnPos);
+		scene.add(bulletMesh);
+		const bullet = {
+			mesh: bulletMesh,
+			direction: direction.clone(),
+			life: bulletLifetime,
+			owner: bot.id, // unique bot ID
+			speed: bot.bulletSpeed,
+		};
+		bullets.push(bullet);
+	}
+	// --- END BOT FUNCTIONS ---
+
+	// --- CAMERA & CONTROL ---
 	let yaw = 0,
 		pitch = 0;
 	window.addEventListener("mousemove", (event) => {
 		if (document.pointerLockElement === renderer.domElement) {
-			// Use relative movement if pointer lock is active
 			yaw -= event.movementX * 0.002;
 			pitch -= event.movementY * 0.002;
 			pitch = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, pitch));
@@ -78,32 +176,32 @@ import * as CANNON from "https://cdn.jsdelivr.net/npm/cannon-es@0.18.0/dist/cann
 		aimHeight = 2;
 	const shoulderOffset = 1.5;
 
-	// GAMEPLAY PARAMETERS
+	// --- GAMEPLAY PARAMETERS ---
 	const playerHeightOffset = 1;
 	let canJump = false;
 	const jumpImpulse = 8;
 	const pickupRange = 2;
-	const bulletSpeed = 20;
 	const bulletLifetime = 3;
 
-	// AEROPLANE (spawn platform)
+	// --- AEROPLANE SPAWN ---
 	let plane,
-		planeSpeed = 5;
+		planeSpeed = 25;
 
-	// COMMON TERRAIN
+	// --- TERRAIN FUNCTIONS ---
 	function getGroundHeight(x, z) {
 		return 3 + 3 * Math.sin(x * 0.05) * Math.cos(z * 0.05);
 	}
 	function createTerrain() {
+		// Increase elementSize to 10 for a 10x larger physics terrain.
 		const gridSize = 101,
-			elementSize = 1;
+			elementSize = 10;
 		const matrix = [];
 		for (let i = 0; i < gridSize; i++) {
 			const row = [];
 			for (let j = 0; j < gridSize; j++) {
 				let x = i - gridSize / 2,
 					z = j - gridSize / 2;
-				row.push(getGroundHeight(x, z));
+				row.push(getGroundHeight(x * elementSize, z * elementSize));
 			}
 			matrix.push(row);
 		}
@@ -117,7 +215,8 @@ import * as CANNON from "https://cdn.jsdelivr.net/npm/cannon-es@0.18.0/dist/cann
 		);
 		world.addBody(hfBody);
 
-		const size = 100,
+		// Visual terrain: 1000 x 1000 plane.
+		const size = 1000,
 			segments = 100;
 		const geometry = new THREE.PlaneGeometry(size, size, segments, segments);
 		geometry.rotateX(-Math.PI / 2);
@@ -137,7 +236,7 @@ import * as CANNON from "https://cdn.jsdelivr.net/npm/cannon-es@0.18.0/dist/cann
 		scene.add(terrain);
 	}
 
-	// AEROPLANE SPAWN
+	// --- AEROPLANE SPAWN ---
 	function createAeroplane() {
 		plane = new THREE.Group();
 		const bodyGeo = new THREE.BoxGeometry(4, 1, 1);
@@ -156,7 +255,7 @@ import * as CANNON from "https://cdn.jsdelivr.net/npm/cannon-es@0.18.0/dist/cann
 		scene.add(plane);
 	}
 
-	// UTILITY: create a name tag sprite
+	// --- UTILITY: NAME TAG ---
 	function createNameTag(name) {
 		const canvas = document.createElement("canvas");
 		const ctx = canvas.getContext("2d");
@@ -177,7 +276,7 @@ import * as CANNON from "https://cdn.jsdelivr.net/npm/cannon-es@0.18.0/dist/cann
 		return sprite;
 	}
 
-	// UI UPDATE
+	// --- UI UPDATE ---
 	function updateUI() {
 		healthDisplay.textContent =
 			"Health: " + (player ? player.userData.health : 0);
@@ -189,7 +288,7 @@ import * as CANNON from "https://cdn.jsdelivr.net/npm/cannon-es@0.18.0/dist/cann
 		leaderboardList.innerHTML = html;
 	}
 
-	// LEADERBOARD SYNC
+	// --- LEADERBOARD SYNC ---
 	function setupLeaderboardSync() {
 		socket.on("updateLeaderboard", (data) => {
 			killCounts = data;
@@ -197,17 +296,22 @@ import * as CANNON from "https://cdn.jsdelivr.net/npm/cannon-es@0.18.0/dist/cann
 		});
 	}
 
-	// INITIALIZE GAME
+	// --- INITIALIZE GAME ---
 	function initGame() {
 		killCounts = {};
 		alivePlayers = {};
+		botPlayers = [];
 		init();
 		createAeroplane();
 		createTerrain();
 		setupLeaderboardSync();
+		// Spawn 5 bots initially.
+		for (let i = 0; i < 50; i++) {
+			spawnBot();
+		}
 	}
 
-	// MAIN INITIALIZATION
+	// --- MAIN INITIALIZATION ---
 	function init() {
 		scene = new THREE.Scene();
 		scene.background = new THREE.Color(0x87ceeb);
@@ -251,10 +355,11 @@ import * as CANNON from "https://cdn.jsdelivr.net/npm/cannon-es@0.18.0/dist/cann
 
 		socket.on("environment", (env) => {
 			env.trees.forEach((pos) => {
+				// Multiply tree positions by 10 to match the larger terrain.
 				createTree(pos.x, pos.z);
 			});
 			env.guns.forEach((pos) => {
-				const gun = createGunModel(pos.x, pos.y, pos.z);
+				const gun = createGunModel(pos.x * 10, pos.y, pos.z * 10);
 				scene.add(gun);
 				guns.push(gun);
 			});
@@ -267,6 +372,7 @@ import * as CANNON from "https://cdn.jsdelivr.net/npm/cannon-es@0.18.0/dist/cann
 					const otherMesh = createOtherPlayer();
 					otherMesh.userData.id = data.id;
 					otherMesh.userData.name = data.name;
+					otherMesh.userData.collisionRadius = 1.5;
 					const tag = createNameTag(data.name);
 					tag.position.set(0, 3, 0);
 					otherMesh.add(tag);
@@ -276,13 +382,13 @@ import * as CANNON from "https://cdn.jsdelivr.net/npm/cannon-es@0.18.0/dist/cann
 			});
 		});
 
-		// NEW: Handle "playerJoined" event so that every client creates new players
 		socket.on("playerJoined", (data) => {
 			alivePlayers[data.id] = true;
 			if (!otherPlayers[data.id]) {
 				const otherMesh = createOtherPlayer();
 				otherMesh.userData.id = data.id;
 				otherMesh.userData.name = data.name;
+				otherMesh.userData.collisionRadius = 1.5;
 				const tag = createNameTag(data.name);
 				tag.position.set(0, 3, 0);
 				otherMesh.add(tag);
@@ -307,6 +413,7 @@ import * as CANNON from "https://cdn.jsdelivr.net/npm/cannon-es@0.18.0/dist/cann
 				otherMesh = createOtherPlayer();
 				otherMesh.userData.id = data.id;
 				otherMesh.userData.name = data.name;
+				otherMesh.userData.collisionRadius = 1.5;
 				const tag = createNameTag(data.name);
 				tag.position.set(0, 3, 0);
 				otherMesh.add(tag);
@@ -349,6 +456,7 @@ import * as CANNON from "https://cdn.jsdelivr.net/npm/cannon-es@0.18.0/dist/cann
 
 		createAeroplane();
 		createPlayer();
+		player.userData.collisionRadius = 1.5;
 		const localTag = createNameTag(playerName);
 		localTag.position.set(0, 3, 0);
 		player.add(localTag);
@@ -362,18 +470,22 @@ import * as CANNON from "https://cdn.jsdelivr.net/npm/cannon-es@0.18.0/dist/cann
 		animate();
 	}
 
-	// WORLD OBJECT CREATION
-
+	// --- WORLD OBJECT CREATION FUNCTIONS ---
 	function createTree(x, z) {
+		// Scale the input coordinates by 10 to match the new terrain.
+		x *= 10;
+		z *= 10;
 		const baseY = getGroundHeight(x, z);
-		const trunkGeo = new THREE.CylinderGeometry(0.25, 0.25, 3, 8);
+		// Increase trunk size by 10×.
+		const trunkGeo = new THREE.CylinderGeometry(2.5, 2.5, 30, 8);
 		const trunkMat = new THREE.MeshLambertMaterial({ color: 0x8b4513 });
 		const trunk = new THREE.Mesh(trunkGeo, trunkMat);
-		trunk.position.set(0, 1.5, 0);
-		const leavesGeo = new THREE.SphereGeometry(1.5, 8, 8);
+		trunk.position.set(0, 15, 0);
+		// Increase leaves size by 10×.
+		const leavesGeo = new THREE.SphereGeometry(15, 8, 8);
 		const leavesMat = new THREE.MeshLambertMaterial({ color: 0x228b22 });
 		const leaves = new THREE.Mesh(leavesGeo, leavesMat);
-		leaves.position.set(0, 3.5, 0);
+		leaves.position.set(0, 35, 0);
 		const tree = new THREE.Group();
 		tree.add(trunk);
 		tree.add(leaves);
@@ -451,6 +563,7 @@ import * as CANNON from "https://cdn.jsdelivr.net/npm/cannon-es@0.18.0/dist/cann
 		playerBody.addShape(shape);
 		playerBody.position.set(startX, startY, startZ);
 		world.addBody(playerBody);
+		player.userData.collisionRadius = 1.5;
 	}
 
 	function createOtherPlayer() {
@@ -491,65 +604,49 @@ import * as CANNON from "https://cdn.jsdelivr.net/npm/cannon-es@0.18.0/dist/cann
 		);
 		rightLeg.position.set(0.3, 0, 0);
 		other.add(rightLeg);
+		other.userData.collisionRadius = 1.5;
 		return other;
 	}
 
-function shootBullet() {
-	// Determine spawn position from the gun's end (or fallback to player's position + offset)
-	let spawnPos = new THREE.Vector3();
-	if (player.userData.hasGun && player.userData.gun) {
-		player.localToWorld(spawnPos.copy(player.userData.gun.position));
-	} else {
-		spawnPos.copy(player.position).add(new THREE.Vector3(0, 2, 0));
+	// --- BULLET HANDLING FUNCTIONS ---
+	function shootBullet() {
+		// Player bullet: speed = 100.
+		const forward = camera.getWorldDirection(new THREE.Vector3()).normalize();
+		let spawnPos = new THREE.Vector3();
+		if (player.userData.hasGun && player.userData.gun) {
+			player.localToWorld(spawnPos.copy(player.userData.gun.position));
+		} else {
+			spawnPos.copy(player.position).add(new THREE.Vector3(0, 2, 0));
+		}
+		const raycaster = new THREE.Raycaster(camera.position, forward);
+		const objectsToTest = scene.children.filter((obj) => obj !== player);
+		const intersects = raycaster.intersectObjects(objectsToTest, true);
+		let targetPoint;
+		if (intersects.length > 0) {
+			targetPoint = intersects[0].point;
+		} else {
+			targetPoint = camera.position
+				.clone()
+				.add(forward.clone().multiplyScalar(1000));
+		}
+		const direction = new THREE.Vector3()
+			.subVectors(targetPoint, spawnPos)
+			.normalize();
+		const bulletGeom = new THREE.BoxGeometry(0.2, 0.2, 0.2);
+		const bulletMat = new THREE.MeshLambertMaterial({ color: 0xff0000 });
+		const bulletMesh = new THREE.Mesh(bulletGeom, bulletMat);
+		bulletMesh.position.copy(spawnPos);
+		scene.add(bulletMesh);
+		const bullet = {
+			mesh: bulletMesh,
+			direction: direction.clone(),
+			life: bulletLifetime,
+			owner: socket.id,
+			speed: 150,
+		};
+		bullets.push(bullet);
+		socket.emit("bulletFired", { position: spawnPos, direction: direction });
 	}
-
-	// Set up a raycaster from the camera's world position and direction.
-	const camPos = new THREE.Vector3();
-	camera.getWorldPosition(camPos);
-	const camDir = camera.getWorldDirection(new THREE.Vector3()).normalize();
-	const raycaster = new THREE.Raycaster(camPos, camDir);
-
-	// Create a list of objects to test against.
-	// We filter out the local player's mesh to avoid self-intersection.
-	const objectsToTest = scene.children.filter((obj) => obj !== player);
-
-	// Raycast – this will return an array of intersections.
-	const intersects = raycaster.intersectObjects(objectsToTest, true);
-	let targetPoint;
-	if (intersects.length > 0) {
-		// Use the closest intersection point.
-		targetPoint = intersects[0].point;
-	} else {
-		// Fallback: a point far ahead along the camera's direction.
-		targetPoint = camPos.clone().add(camDir.clone().multiplyScalar(1000));
-	}
-
-	// Calculate the bullet's direction: from the gun's spawn position toward the target point.
-	const direction = new THREE.Vector3()
-		.subVectors(targetPoint, spawnPos)
-		.normalize();
-
-	// Create the bullet mesh.
-	const bulletGeom = new THREE.BoxGeometry(0.2, 0.2, 0.2);
-	const bulletMat = new THREE.MeshLambertMaterial({ color: 0xff0000 });
-	const bulletMesh = new THREE.Mesh(bulletGeom, bulletMat);
-	bulletMesh.position.copy(spawnPos);
-	scene.add(bulletMesh);
-
-	// Create the bullet object.
-	const bullet = {
-		mesh: bulletMesh,
-		direction: direction.clone(),
-		life: bulletLifetime,
-		owner: socket.id,
-	};
-	bullets.push(bullet);
-
-	// Emit the bulletFired event to notify other clients.
-	socket.emit("bulletFired", { position: spawnPos, direction: direction });
-}
-
-
 	function spawnBullet(position, direction, ownerId) {
 		const bulletGeom = new THREE.BoxGeometry(0.2, 0.2, 0.2);
 		const bulletMat = new THREE.MeshLambertMaterial({ color: 0xff0000 });
@@ -563,11 +660,12 @@ function shootBullet() {
 			direction: new THREE.Vector3(direction.x, direction.y, direction.z),
 			life: bulletLifetime,
 			owner: ownerId,
+			speed: ownerId.startsWith("bot") ? 80 : 100,
 		};
 		bullets.push(bullet);
 	}
 
-	// CROSSHAIR UPDATE
+	// --- CROSSHAIR UPDATE ---
 	function updateCrosshair() {
 		const crosshair = document.getElementById("crosshair");
 		const aimDistanceFixed = 10;
@@ -585,7 +683,7 @@ function shootBullet() {
 		crosshair.style.top = `${y - 5}px`;
 	}
 
-	// ANIMATION LOOP
+	// --- ANIMATION LOOP ---
 	const clock = new THREE.Clock();
 	function animate() {
 		if (isDead) return;
@@ -593,10 +691,9 @@ function shootBullet() {
 		const delta = clock.getDelta();
 		world.step(1 / 60, delta, 3);
 
-		// Aeroplane movement
 		if (plane) {
 			plane.position.x += planeSpeed * delta;
-			if (plane.position.x > 50) {
+			if (plane.position.x > 500) {
 				playerBody.velocity.y = -5;
 				scene.remove(plane);
 				plane = null;
@@ -607,7 +704,6 @@ function shootBullet() {
 			}
 		}
 
-		// Keep player on terrain
 		const desiredY =
 			getGroundHeight(playerBody.position.x, playerBody.position.z) +
 			playerHeightOffset;
@@ -618,7 +714,6 @@ function shootBullet() {
 		player.position.copy(playerBody.position);
 		player.rotation.y = yaw;
 
-		// Movement – A and D reversed (A moves right, D moves left)
 		const camDir = camera
 			.getWorldDirection(new THREE.Vector3())
 			.setY(0)
@@ -626,7 +721,7 @@ function shootBullet() {
 		const right = new THREE.Vector3()
 			.crossVectors(new THREE.Vector3(0, 1, 0), camDir)
 			.normalize();
-		const speed = 5;
+		const speed = 8;
 		let vx = 0,
 			vz = 0;
 		if (keys["KeyW"]) {
@@ -652,7 +747,7 @@ function shootBullet() {
 		updateCrosshair();
 		updateUI();
 
-		// Gun pickup – attach gun with fixed orientation
+		// Gun pickup.
 		for (let i = guns.length - 1; i >= 0; i--) {
 			const gun = guns[i];
 			if (
@@ -668,48 +763,69 @@ function shootBullet() {
 			}
 		}
 
-		// Bullet updates and collision with remote players
+		// --- BULLET COLLISION UPDATE USING SUBSTEPS ---
+		const subSteps = 4;
 		for (let i = bullets.length - 1; i >= 0; i--) {
 			const bullet = bullets[i];
-			bullet.mesh.position.add(
-				bullet.direction.clone().multiplyScalar(bulletSpeed * delta)
-			);
-			bullet.life -= delta;
-			for (const id in otherPlayers) {
-				if (!alivePlayers[id]) continue;
-				const other = otherPlayers[id];
-				if (bullet.mesh.position.distanceTo(other.position) < 1) {
-					const damage = 20;
+			const subDelta = delta / subSteps;
+			let collided = false;
+			for (let step = 0; step < subSteps; step++) {
+				bullet.mesh.position.add(
+					bullet.direction.clone().multiplyScalar(bullet.speed * subDelta)
+				);
+				// Check collision with remote players.
+				for (const id in otherPlayers) {
+					if (!alivePlayers[id]) continue;
+					const other = otherPlayers[id];
 					if (
-						bullet.owner === socket.id &&
-						other.userData.health > 0 &&
-						other.userData.health - damage <= 0
+						bullet.mesh.position.distanceTo(other.position) <
+						other.userData.collisionRadius
 					) {
-						recordKill(playerName);
+						const damage = 20;
+						if (
+							bullet.owner === socket.id &&
+							other.userData.health > 0 &&
+							other.userData.health - damage <= 0
+						) {
+							recordKill(playerName);
+						}
+						other.userData.health -= damage;
+						if (other.userData.health <= 0) {
+							scene.remove(other);
+							delete otherPlayers[id];
+							delete alivePlayers[id];
+						}
+						collided = true;
+						break;
 					}
-					other.userData.health -= damage;
-					if (other.userData.health <= 0) {
-						scene.remove(other);
-						delete otherPlayers[id];
-						delete alivePlayers[id];
-					}
-					scene.remove(bullet.mesh);
-					bullets.splice(i, 1);
-					break;
 				}
+				// Check collision with local player.
+				if (!collided && bullet.owner !== socket.id) {
+					if (
+						bullet.mesh.position.distanceTo(player.position) <
+						player.userData.collisionRadius
+					) {
+						const damage = 20;
+						player.userData.health -= damage;
+						collided = true;
+					}
+				}
+				if (collided) break;
 			}
-			if (bullet.life <= 0) {
+			bullet.life -= delta;
+			if (collided || bullet.life <= 0) {
 				scene.remove(bullet.mesh);
 				bullets.splice(i, 1);
 			}
 		}
 
-		// Check bullet collisions with local player
+		// Safety check for local player collision.
 		for (let i = bullets.length - 1; i >= 0; i--) {
 			const bullet = bullets[i];
 			if (
 				bullet.owner !== socket.id &&
-				bullet.mesh.position.distanceTo(player.position) < 1
+				bullet.mesh.position.distanceTo(player.position) <
+					player.userData.collisionRadius
 			) {
 				const damage = 20;
 				player.userData.health -= damage;
@@ -721,7 +837,36 @@ function shootBullet() {
 			handleLocalDeath();
 			return;
 		}
-		// Emit local update
+
+		// Update bots.
+		for (let i = 0; i < botPlayers.length; i++) {
+			updateBot(botPlayers[i], delta);
+		}
+		// Check bullet collisions with bots.
+		for (let i = bullets.length - 1; i >= 0; i--) {
+			const bullet = bullets[i];
+			for (let j = 0; j < botPlayers.length; j++) {
+				const bot = botPlayers[j];
+				// Prevent bot from being hit by its own bullet.
+				if (bullet.owner === bot.id) continue;
+				if (
+					bullet.mesh.position.distanceTo(bot.mesh.position) <
+					bot.mesh.userData.collisionRadius
+				) {
+					const damage = 20;
+					bot.health -= damage;
+					scene.remove(bullet.mesh);
+					bullets.splice(i, 1);
+					if (bot.health <= 0) {
+						scene.remove(bot.mesh);
+						botPlayers.splice(j, 1);
+						spawnBot(); // Spawn new bot on kill.
+					}
+					break;
+				}
+			}
+		}
+
 		socket.emit("playerUpdate", {
 			id: socket.id,
 			position: player.position,
@@ -755,7 +900,6 @@ function shootBullet() {
 		socket.emit("reportKill", { name });
 	}
 
-	// LOCAL DEATH HANDLING: remove from alivePlayers, stop input, notify others, show overlay
 	function handleLocalDeath() {
 		isDead = true;
 		delete alivePlayers[socket.id];
@@ -768,7 +912,6 @@ function shootBullet() {
 		gameOverOverlay.style.display = "flex";
 	}
 
-	// INPUT HANDLERS
 	function onKeyDown(event) {
 		if (isDead || event.repeat) return;
 		keys[event.code] = true;
