@@ -5,16 +5,16 @@ import * as CANNON from "https://cdn.jsdelivr.net/npm/cannon-es@0.18.0/dist/cann
 (() => {
 	// GLOBAL VARIABLES
 	let scene, camera, renderer, world, socket;
-	let player, playerBody; // local player and its physics body
+	let player, playerBody; // local player and physics body
 	let hfBody; // physics heightfield for terrain
-	let otherPlayers = {}; // remote players keyed by id
+	let otherPlayers = {}; // remote players keyed by socket id
 	let guns = []; // gun models in the world
 	let bullets = []; // active bullets
 
 	let killCounts = {}; // leaderboard
 	const keys = {}; // keyboard state
 
-	// Global alive players list – only these players are processed
+	// Global alivePlayers: only players whose id is in this object are alive.
 	let alivePlayers = {};
 
 	// UI elements
@@ -35,14 +35,12 @@ import * as CANNON from "https://cdn.jsdelivr.net/npm/cannon-es@0.18.0/dist/cann
 		localStorage.setItem("playerName", playerName);
 		preGameOverlay.style.display = "none";
 		initGame();
-		// Request pointer lock when starting the game
 		renderer.domElement.requestPointerLock?.();
 	});
 	if (playerName !== "") {
 		preGameOverlay.style.display = "none";
 		setTimeout(() => {
 			initGame();
-			// If a name exists in cache, immediately request pointer lock
 			renderer.domElement.requestPointerLock?.();
 		}, 1000);
 	}
@@ -53,13 +51,12 @@ import * as CANNON from "https://cdn.jsdelivr.net/npm/cannon-es@0.18.0/dist/cann
 	let yaw = 0,
 		pitch = 0;
 	window.addEventListener("mousemove", (event) => {
-		// If pointer lock is active, use relative movement
 		if (document.pointerLockElement === renderer.domElement) {
+			// Use relative movement if pointer lock is active
 			yaw -= event.movementX * 0.002;
 			pitch -= event.movementY * 0.002;
 			pitch = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, pitch));
 		} else {
-			// Fallback: absolute positions
 			yaw = THREE.MathUtils.lerp(
 				-Math.PI,
 				Math.PI,
@@ -93,12 +90,11 @@ import * as CANNON from "https://cdn.jsdelivr.net/npm/cannon-es@0.18.0/dist/cann
 	let plane,
 		planeSpeed = 5;
 
-	// COMMON TERRAIN: deterministic height function
+	// COMMON TERRAIN
 	function getGroundHeight(x, z) {
 		return 3 + 3 * Math.sin(x * 0.05) * Math.cos(z * 0.05);
 	}
 	function createTerrain() {
-		// Create physics heightfield
 		const gridSize = 101,
 			elementSize = 1;
 		const matrix = [];
@@ -121,7 +117,6 @@ import * as CANNON from "https://cdn.jsdelivr.net/npm/cannon-es@0.18.0/dist/cann
 		);
 		world.addBody(hfBody);
 
-		// Create visual terrain mesh
 		const size = 100,
 			segments = 100;
 		const geometry = new THREE.PlaneGeometry(size, size, segments, segments);
@@ -214,7 +209,6 @@ import * as CANNON from "https://cdn.jsdelivr.net/npm/cannon-es@0.18.0/dist/cann
 
 	// MAIN INITIALIZATION
 	function init() {
-		// Scene, camera, renderer
 		scene = new THREE.Scene();
 		scene.background = new THREE.Color(0x87ceeb);
 		camera = new THREE.PerspectiveCamera(
@@ -227,25 +221,21 @@ import * as CANNON from "https://cdn.jsdelivr.net/npm/cannon-es@0.18.0/dist/cann
 		renderer.setSize(window.innerWidth, window.innerHeight);
 		document.body.appendChild(renderer.domElement);
 
-		// Request pointer lock automatically if playerName exists.
 		if (playerName !== "") {
 			renderer.domElement.requestPointerLock?.();
 		}
 
-		// Lights
 		const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
 		scene.add(ambientLight);
 		const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
 		directionalLight.position.set(5, 10, 7.5);
 		scene.add(directionalLight);
 
-		// Physics world
 		world = new CANNON.World();
 		world.gravity.set(0, -9.82, 0);
 		world.broadphase = new CANNON.NaiveBroadphase();
 		world.solver.iterations = 10;
 
-		// Ground physics plane
 		const groundMaterial = new CANNON.Material();
 		const groundShape = new CANNON.Plane();
 		const groundBody = new CANNON.Body({ mass: 0, material: groundMaterial });
@@ -253,15 +243,12 @@ import * as CANNON from "https://cdn.jsdelivr.net/npm/cannon-es@0.18.0/dist/cann
 		groundBody.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
 		world.addBody(groundBody);
 
-		// Create common terrain (physics + visual)
 		createTerrain();
 
-		// Connect to server
 		socket = io();
 		socket.emit("joinGame", { name: playerName });
-		alivePlayers[socket.id] = true; // mark local as alive
+		alivePlayers[socket.id] = true;
 
-		// Receive common environment (trees and guns)
 		socket.on("environment", (env) => {
 			env.trees.forEach((pos) => {
 				createTree(pos.x, pos.z);
@@ -273,7 +260,6 @@ import * as CANNON from "https://cdn.jsdelivr.net/npm/cannon-es@0.18.0/dist/cann
 			});
 		});
 
-		// Receive current players
 		socket.on("allPlayers", (playersData) => {
 			playersData.forEach((data) => {
 				alivePlayers[data.id] = true;
@@ -290,7 +276,21 @@ import * as CANNON from "https://cdn.jsdelivr.net/npm/cannon-es@0.18.0/dist/cann
 			});
 		});
 
-		// Update remote players in real time
+		// NEW: Handle "playerJoined" event so that every client creates new players
+		socket.on("playerJoined", (data) => {
+			alivePlayers[data.id] = true;
+			if (!otherPlayers[data.id]) {
+				const otherMesh = createOtherPlayer();
+				otherMesh.userData.id = data.id;
+				otherMesh.userData.name = data.name;
+				const tag = createNameTag(data.name);
+				tag.position.set(0, 3, 0);
+				otherMesh.add(tag);
+				otherPlayers[data.id] = otherMesh;
+				scene.add(otherMesh);
+			}
+		});
+
 		socket.on("playerUpdate", (data) => {
 			if (data.id === socket.id) return;
 			if (!alivePlayers[data.id]) return;
@@ -315,7 +315,6 @@ import * as CANNON from "https://cdn.jsdelivr.net/npm/cannon-es@0.18.0/dist/cann
 			}
 			otherMesh.position.set(data.position.x, data.position.y, data.position.z);
 			otherMesh.userData.health = data.health;
-			// Update gun state for remote player
 			if (data.hasGun) {
 				if (!otherMesh.userData.gun) {
 					const gun = createGunModel(0, 0, 0);
@@ -344,20 +343,16 @@ import * as CANNON from "https://cdn.jsdelivr.net/npm/cannon-es@0.18.0/dist/cann
 			spawnBullet(data.position, data.direction, data.id);
 		});
 
-		// Input event listeners
 		window.addEventListener("keydown", onKeyDown);
 		window.addEventListener("keyup", onKeyUp);
 		window.addEventListener("mousedown", onMouseDown);
 
-		// Spawn aeroplane for entry
 		createAeroplane();
-		// Create local player
 		createPlayer();
 		const localTag = createNameTag(playerName);
 		localTag.position.set(0, 3, 0);
 		player.add(localTag);
 
-		// Allow jump when colliding with terrain
 		playerBody.addEventListener("collide", (e) => {
 			if (e.body === hfBody) {
 				canJump = true;
@@ -565,7 +560,7 @@ import * as CANNON from "https://cdn.jsdelivr.net/npm/cannon-es@0.18.0/dist/cann
 		const delta = clock.getDelta();
 		world.step(1 / 60, delta, 3);
 
-		// Aeroplane movement for spawn
+		// Aeroplane movement
 		if (plane) {
 			plane.position.x += planeSpeed * delta;
 			if (plane.position.x > 50) {
@@ -590,7 +585,7 @@ import * as CANNON from "https://cdn.jsdelivr.net/npm/cannon-es@0.18.0/dist/cann
 		player.position.copy(playerBody.position);
 		player.rotation.y = yaw;
 
-		// Movement – A and D keys reversed (A moves right, D moves left)
+		// Movement – A and D reversed (A moves right, D moves left)
 		const camDir = camera
 			.getWorldDirection(new THREE.Vector3())
 			.setY(0)
@@ -693,7 +688,7 @@ import * as CANNON from "https://cdn.jsdelivr.net/npm/cannon-es@0.18.0/dist/cann
 			handleLocalDeath();
 			return;
 		}
-		// Emit local player update
+		// Emit local update
 		socket.emit("playerUpdate", {
 			id: socket.id,
 			position: player.position,
@@ -727,7 +722,7 @@ import * as CANNON from "https://cdn.jsdelivr.net/npm/cannon-es@0.18.0/dist/cann
 		socket.emit("reportKill", { name });
 	}
 
-	// LOCAL DEATH HANDLING: update alivePlayers, remove mesh, stop updates, notify others, show overlay
+	// LOCAL DEATH HANDLING: remove from alivePlayers, stop input, notify others, show overlay
 	function handleLocalDeath() {
 		isDead = true;
 		delete alivePlayers[socket.id];

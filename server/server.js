@@ -1,6 +1,7 @@
 const express = require("express");
 const http = require("http");
 const socketIo = require("socket.io");
+const path = require("path");
 
 const app = express();
 const server = http.createServer(app);
@@ -9,7 +10,7 @@ const io = socketIo(server);
 // Shared leaderboard
 let matchKillCounts = {};
 
-// Define a common environment with fixed positions
+// Define common environment with fixed positions
 const environment = {
 	trees: [],
 	guns: [],
@@ -31,15 +32,12 @@ for (let i = 0; i < 20; i++) {
 // Track connected players (alive only)
 let players = {};
 
-app.use(express.static("client"));
+app.use(express.static(path.join(__dirname, "..", "client")));
 
-const path = require("path");
 app.get("/leaderboard", (req, res) => {
+	// Optionally, you can serve a separate leaderboard page.
 	res.sendFile(path.join(__dirname, "..", "client", "leaderboard.html"));
 });
-
-
-
 
 io.on("connection", (socket) => {
 	console.log("Player connected: " + socket.id);
@@ -52,6 +50,7 @@ io.on("connection", (socket) => {
 			health: 100,
 			hasGun: false,
 		};
+
 		// Send common environment to new client
 		socket.emit("environment", environment);
 		// Send current alive players (except self)
@@ -59,6 +58,7 @@ io.on("connection", (socket) => {
 			"allPlayers",
 			Object.values(players).filter((p) => p.id !== socket.id)
 		);
+		// Broadcast new player joined
 		socket.broadcast.emit("playerJoined", {
 			id: socket.id,
 			name: players[socket.id].name,
