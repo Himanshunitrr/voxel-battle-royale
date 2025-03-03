@@ -7,7 +7,7 @@ const app = express();
 const server = http.createServer(app);
 const io = socketIo(server);
 
-// Shared leaderboard
+// Shared leaderboard object (global kill counts)
 let matchKillCounts = {};
 
 // Define common environment with fixed positions
@@ -34,9 +34,18 @@ let players = {};
 
 app.use(express.static(path.join(__dirname, "..", "client")));
 
+// Serve the leaderboard HTML page
 app.get("/leaderboard", (req, res) => {
-	// Optionally, you can serve a separate leaderboard page.
 	res.sendFile(path.join(__dirname, "..", "client", "leaderboard.html"));
+});
+
+// New route to serve the global leaderboard JSON data
+app.get("/api/leaderboard", (req, res) => {
+	// Sort leaderboard data by kills in descending order and return top 10.
+	const sorted = Object.entries(matchKillCounts)
+		.sort((a, b) => b[1] - a[1])
+		.slice(0, 10);
+	res.json(sorted);
 });
 
 io.on("connection", (socket) => {
@@ -51,14 +60,13 @@ io.on("connection", (socket) => {
 			hasGun: false,
 		};
 
-		// Send common environment to new client
+		// Send common environment to the new client
 		socket.emit("environment", environment);
-		// Send current alive players (except self)
+		// Send all current alive players (except self)
 		socket.emit(
 			"allPlayers",
 			Object.values(players).filter((p) => p.id !== socket.id)
 		);
-		// Broadcast new player joined
 		socket.broadcast.emit("playerJoined", {
 			id: socket.id,
 			name: players[socket.id].name,

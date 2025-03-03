@@ -76,7 +76,7 @@ import * as CANNON from "https://cdn.jsdelivr.net/npm/cannon-es@0.18.0/dist/cann
 		defaultHeight = 3;
 	const aimDistance = 2,
 		aimHeight = 2;
-	const shoulderOffset = 0.5;
+	const shoulderOffset = 1.5;
 
 	// GAMEPLAY PARAMETERS
 	const playerHeightOffset = 1;

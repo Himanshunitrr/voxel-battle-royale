@@ -64,29 +64,34 @@
     <a href="/" class="button">Back to Game</a>
   </div>
   <script>
-    // Fetch leaderboard data from the server and render it as a table.
-    fetch('/leaderboard')
-      .then(response => response.json())
-      .then(data => {
-        // Data is expected to be an array of arrays: [ [name, kills], ... ]
-        const tbody = document.getElementById("leaderboardTable").querySelector("tbody");
-        data.forEach((entry, index) => {
-          const tr = document.createElement("tr");
-          const rankTd = document.createElement("td");
-          rankTd.textContent = index + 1;
-          const nameTd = document.createElement("td");
-          nameTd.textContent = entry[0];
-          const killsTd = document.createElement("td");
-          killsTd.textContent = entry[1];
-          tr.appendChild(rankTd);
-          tr.appendChild(nameTd);
-          tr.appendChild(killsTd);
-          tbody.appendChild(tr);
+    // Fetch leaderboard data from the API and render the table
+    function loadLeaderboard() {
+      fetch('/api/leaderboard')
+        .then(response => response.json())
+        .then(data => {
+          const tbody = document.getElementById("leaderboardTable").querySelector("tbody");
+          tbody.innerHTML = "";
+          data.forEach((entry, index) => {
+            const tr = document.createElement("tr");
+            const rankTd = document.createElement("td");
+            rankTd.textContent = index + 1;
+            const nameTd = document.createElement("td");
+            nameTd.textContent = entry[0];
+            const killsTd = document.createElement("td");
+            killsTd.textContent = entry[1];
+            tr.appendChild(rankTd);
+            tr.appendChild(nameTd);
+            tr.appendChild(killsTd);
+            tbody.appendChild(tr);
+          });
+        })
+        .catch(err => {
+          console.error("Failed to load leaderboard", err);
         });
-      })
-      .catch(err => {
-        console.error("Failed to load leaderboard", err);
-      });
+    }
+    // Load the leaderboard immediately, and optionally refresh every 10 seconds.
+    loadLeaderboard();
+    setInterval(loadLeaderboard, 10000);
   </script>
 </body>
 </html>
